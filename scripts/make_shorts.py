@@ -6,7 +6,7 @@ For each clip in --clips (or a single --start/--dur/--name):
    2. build a 1080x1920 blurred-background vertical version
    3. transcribe -> srt + cinematic word-level ass subtitles
    4. mix background music under the dialogue
-   5. burn the subtitles in -> clips/<name>/<name>_cinematic.mp4
+   5. burn the subtitles in -> clips/<name>/cinematic.mp4
 
 Changes from the original version:
    - GPU->CPU fallback for transcription instead of a hard crash
@@ -215,12 +215,12 @@ def process_clip(opts, clip):
     clip_dir = out_dir / name
     clip_dir.mkdir(parents=True, exist_ok=True)
 
-    raw = clip_dir / f"{name}.mp4"
-    blurred = clip_dir / f"{name}_blurred.mp4"
-    final = clip_dir / f"{name}_final.mp4"
-    cinematic = clip_dir / f"{name}_cinematic.mp4"
-    srt = clip_dir / f"{name}.srt"
-    ass = clip_dir / f"{name}_blurred.ass"
+    raw = clip_dir / "raw.mp4"
+    blurred = clip_dir / "blurred.mp4"
+    final = clip_dir / "final.mp4"
+    cinematic = clip_dir / "cinematic.mp4"
+    srt = clip_dir / "subtitles.srt"
+    ass = clip_dir / "captions.ass"
 
     print(f"=== {name} ===")
     t0 = time.time()
@@ -258,6 +258,33 @@ def process_clip(opts, clip):
     print(f"DONE -> {cinematic}  ({time.time() - t0:.1f}s)")
 
 
+def _resolve(path: str) -> Path:
+    """Resolve a configured path; relative paths are anchored to the project root."""
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return p
+
+
+def effective_opts(opts, config, clip):
+    """Per-clip options: CLI defaults, overridden by clips.json config keys,
+    then by any per-clip keys."""
+    ropts = argparse.Namespace(**vars(opts))
+    for key in ("video", "music", "music_start", "music_volume", "out_dir",
+                "whisper_model", "blur", "no_music", "no_duck", "existing",
+                "duck_threshold", "duck_ratio", "duck_attack", "duck_release"):
+        if config.get(key) is not None:
+            setattr(ropts, key, config[key])
+        if clip.get(key) is not None:
+            setattr(ropts, key, clip[key])
+    for key in ("video", "music", "out_dir"):
+        try:
+            setattr(ropts, key, str(_resolve(getattr(ropts, key))))
+        except TypeError:
+            pass
+    return ropts
+
+
 def main():
     parser = argparse.ArgumentParser(description="Automatic shorts pipeline")
     parser.add_argument(
@@ -292,20 +319,28 @@ def main():
 
     if opts.clips:
         with open(opts.clips, encoding="utf-8") as f:
-            clips = json.load(f)
-    elif opts.existing and not opts.name:
-        parser.error("--existing also requires --name")
-    elif opts.existing:
-        clips = [{"name": opts.name}]
-    elif opts.start is not None and opts.dur is not None and opts.name:
-        clips = [{"name": opts.name, "start": opts.start, "dur": opts.dur}]
+            data = json.load(f)
+        if isinstance(data, dict):
+            config = data
+            clips = data.get("clips") or []
+        else:
+            config = {}
+            clips = data
     else:
-        parser.error("provide --clips file, or --start/--dur/--name")
+        config = {}
+        if opts.existing and not opts.name:
+            parser.error("--existing also requires --name")
+        elif opts.existing:
+            clips = [{"name": opts.name}]
+        elif opts.start is not None and opts.dur is not None and opts.name:
+            clips = [{"name": opts.name, "start": opts.start, "dur": opts.dur}]
+        else:
+            parser.error("provide --clips file, or --start/--dur/--name")
 
     failures = []
     for clip in clips:
         try:
-            process_clip(opts, clip)
+            process_clip(effective_opts(opts, config, clip), clip)
         except Exception as e:
             print(f"!!! FAILED: {clip.get('name', '?')}: {e}")
             failures.append(clip.get("name", "?"))

@@ -17,7 +17,8 @@ shorts-maker/
 ├── clips/                    # generated output
 │   ├── clip01/
 │   └── clip02/
-├── clips.json                # optional: batch definitions
+├── clips.json                # optional: batch/config definitions
+├── requirements.txt          # Python dependencies
 ├── venv/                     # Python environment (git-ignored)
 └── readme.md
 ```
@@ -30,7 +31,7 @@ shorts-maker/
 - A source video in `video/` and a background music file in `music/`
 
 ```bash
-venv/bin/pip install faster-whisper
+venv/bin/pip install -r requirements.txt
 ```
 
 ## 1. Find your clip's start/end times
@@ -56,20 +57,36 @@ The video and music defaults come from `video/video.mp4` and
 and `--name`.
 
 What happens, in order (everything lands in `clips/<name>/`):
-1. **Extract** — cuts 45s starting at 2:00 out of `video/video.mp4` → `clips/clip01/clip01.mp4`
-2. **Blur/reframe** — builds the 1080x1920 vertical version: centered clip, blurred zoomed copy filling top/bottom → `clips/clip01/clip01_blurred.mp4`
-3. **Transcribe** — runs faster-whisper (GPU if available, CPU fallback otherwise) → `clips/clip01/clip01.srt` + `clips/clip01/clip01_blurred.ass`
-4. **Mix music** — auto-ducks the music under dialogue, holds at `--music-volume` in gaps → `clips/clip01/clip01_final.mp4`
-5. **Burn captions** → `clips/clip01/clip01_cinematic.mp4` ← **this is your finished file**
+1. **Extract** — cuts 45s starting at 2:00 out of `video/video.mp4` → `clips/clip01/raw.mp4`
+2. **Blur/reframe** — builds the 1080x1920 vertical version: centered clip, blurred zoomed copy filling top/bottom → `clips/clip01/blurred.mp4`
+3. **Transcribe** — runs faster-whisper (GPU if available, CPU fallback otherwise) → `clips/clip01/subtitles.srt` + `clips/clip01/captions.ass`
+4. **Mix music** — auto-ducks the music under dialogue, holds at `--music-volume` in gaps → `clips/clip01/final.mp4`
+5. **Burn captions** → `clips/clip01/cinematic.mp4` ← **this is your finished file**
 
 ## 3. Batch: multiple clips from one source
 
-Create `clips.json`:
+Create `clips.json`. It can be a single JSON object with shared config plus a
+`clips` list — every `--flag` in the reference below is available as a key, and
+any key can also be set per-clip:
+
+```json
+{
+  "video": "video/video.mp4",
+  "music": "music/music.mp3",
+  "music_volume": 0.12,
+  "out_dir": "clips",
+  "clips": [
+    {"name": "clip01", "start": 120,  "dur": 45},
+    {"name": "clip02", "start": 900,  "dur": 30, "music_volume": 0.15},
+    {"name": "clip03", "start": 1500, "dur": 60, "no_music": true}
+  ]
+}
+```
+
+A plain list of clips also still works:
 ```json
 [
-  {"name": "clip01", "start": 120,  "dur": 45},
-  {"name": "clip02", "start": 900,  "dur": 30},
-  {"name": "clip03", "start": 1500, "dur": 60}
+  {"name": "clip01", "start": 120, "dur": 45}
 ]
 ```
 
@@ -77,6 +94,10 @@ Run:
 ```bash
 venv/bin/python scripts/make_shorts.py --clips clips.json
 ```
+
+Priority (lowest to highest): CLI defaults → `clips.json` top-level keys →
+per-clip keys. Relative paths in `clips.json` are resolved against the project
+root.
 
 Each clip runs independently — if one fails, the rest still process, and you
 get a summary at the end:
@@ -88,9 +109,10 @@ Failed: clip02
 ## 4. Starting from a clip you already cut elsewhere
 
 ```bash
-venv/bin/python scripts/make_shorts.py --existing clips/clip02/clip02.mp4 --name clip02
+venv/bin/python scripts/make_shorts.py --existing clips/clip02/raw.mp4 --name clip02
 ```
-Skips step 1, starts straight at the blur/reframe stage.
+Skips step 1, starts straight at the blur/reframe stage. `--existing` also
+works per-clip as an `"existing"` key in `clips.json`.
 
 ## 5. Common adjustments
 
@@ -146,15 +168,15 @@ to re-run the same command after a crash; it picks up where it left off.
 
 To force a full redo of one clip:
 ```bash
-venv/bin/python scripts/make_shorts.py --existing clips/clip01/clip01.mp4 --name clip01 --force
+venv/bin/python scripts/make_shorts.py --existing clips/clip01/raw.mp4 --name clip01 --force
 ```
 
 To redo only the music/burn stage (keep the existing transcript and blurred
 video, e.g. after changing duck settings) without `--force` re-running
 everything:
 ```bash
-rm clips/clip01/clip01_final.mp4 clips/clip01/clip01_cinematic.mp4
-venv/bin/python scripts/make_shorts.py --existing clips/clip01/clip01.mp4 --name clip01
+rm clips/clip01/final.mp4 clips/clip01/cinematic.mp4
+venv/bin/python scripts/make_shorts.py --existing clips/clip01/raw.mp4 --name clip01
 ```
 
 ## 7. Flag reference
@@ -179,14 +201,17 @@ venv/bin/python scripts/make_shorts.py --existing clips/clip01/clip01.mp4 --name
 | `--out-dir` | `clips` | parent output directory (per-clip subfolders inside) |
 | `--force` | off | redo all steps even if outputs exist |
 
+Every flag maps to an equally-named key usable in `clips.json` (top-level or
+per-clip), e.g. `"--no-music"` becomes `"no_music": true`.
+
 ## 8. Output files per clip
 
 For a clip named `clip01`, everything lives in `clips/clip01/`:
 ```
-clips/clip01/clip01.mp4            # raw extracted segment
-clips/clip01/clip01_blurred.mp4    # vertical reframed version
-clips/clip01/clip01.srt            # plain subtitle file
-clips/clip01/clip01_blurred.ass    # styled word-level subtitles
-clips/clip01/clip01_final.mp4      # blurred + music mixed
-clips/clip01/clip01_cinematic.mp4  # ← finished, captioned output
+clips/clip01/raw.mp4           # raw extracted segment
+clips/clip01/blurred.mp4       # vertical reframed version
+clips/clip01/subtitles.srt     # plain subtitle file
+clips/clip01/captions.ass      # styled word-level subtitles
+clips/clip01/final.mp4         # blurred + music mixed
+clips/clip01/cinematic.mp4     # ← finished, captioned output
 ```
