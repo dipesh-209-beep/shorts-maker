@@ -23,6 +23,7 @@ Changes from the original version:
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -205,17 +206,15 @@ def process_clip(opts, clip):
               + ("  (skip: exists)" if blurred.exists() and not opts.force else ""))
         print(f"  transcribe: {blurred} -> {srt} + {ass}"
               + ("  (skip: exists)" if srt.exists() and ass.exists() and not opts.force else ""))
+        print(f"  burn     : {blurred} + {ass} -> {final}"
+              + ("  (skip: exists)" if final.exists() and not opts.force else ""))
         if opts.no_music or not Path(opts.music).exists():
-            print("  mix      : (skipped - no music)")
-            mix_base = blurred
+            print(f"  copy     : {final} -> {cinematic}  (no music)")
         else:
-            print(f"  mix      : {blurred} + {opts.music} [{opts.music_start} @ vol {opts.music_volume}] -> {final}"
-                  + ("  (skip: exists)" if final.exists() and not opts.force else ""))
-            mix_base = final
-        print(f"  burn     : {mix_base} + {ass} -> {cinematic}"
-              + ("  (skip: exists)" if cinematic.exists() and not opts.force else ""))
+            print(f"  mix      : {final} + {opts.music} [{opts.music_start} @ vol {opts.music_volume}] -> {cinematic}"
+                  + ("  (skip: exists)" if cinematic.exists() and not opts.force else ""))
         if opts.cleanup:
-            print("  cleanup  : remove raw/blurred/final once cinematic exists")
+            print("  cleanup  : remove raw/blurred once final and cinematic exist")
         return
 
     if cinematic.exists() and not opts.force:
@@ -245,27 +244,30 @@ def process_clip(opts, clip):
     make_blurred(raw, blurred, blur_strength=opts.blur, force=opts.force)
     transcribe(blurred, srt, ass, model_size=opts.whisper_model, force=opts.force)
 
+    burn_ass(blurred, ass, final, force=opts.force)
+    print(f"FINAL -> {final} ({time.time() - t0:.1f}s)")
+
     if opts.no_music or not Path(opts.music).exists():
-        print("Skipping music mix")
-        mix_base = blurred
+        print("Skipping music mix, copying final -> cinematic")
+        if not cinematic.exists() or opts.force:
+            shutil.copy2(final, cinematic)
+        mix_base = final
     else:
         mix_music(
-            blurred, opts.music, opts.music_start, opts.music_volume, final,
+            final, opts.music, opts.music_start, opts.music_volume, cinematic,
             force=opts.force, duck=not opts.no_duck,
             duck_threshold=opts.duck_threshold, duck_ratio=opts.duck_ratio,
             duck_attack=opts.duck_attack, duck_release=opts.duck_release,
         )
-        mix_base = final
+        mix_base = cinematic
 
-    burn_ass(mix_base, ass, cinematic, force=opts.force)
     print(f"DONE -> {cinematic}  ({time.time() - t0:.1f}s)")
 
     if opts.cleanup:
-        removed = []
+        removed = [blurred]
         if not opts.existing:
-            removed.append(raw)
-        removed.append(blurred)
-        if mix_base is final:
+            removed.insert(0, raw)
+        if mix_base is cinematic:
             removed.append(final)
         for p in removed:
             if p.exists():
