@@ -16,44 +16,21 @@ Changes from the original version:
    - one clip failing no longer aborts the rest of a batch; failures are summarized
      at the end and the process exits non-zero if any clip failed
    - whisper model size and boxblur strength are now CLI flags instead of hardcoded
+   - whisper model loading (with GPU->CPU fallback + caching) lives in whisper_utils.py
+   - --dry-run prints the step plan (paths + skip/run) without running anything
+   - --cleanup deletes raw/blurred/final after cinematic.mp4 is produced
 """
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = ROOT.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _bootstrap_cuda():
-    """faster-whisper bundles CUDA libs inside the venv; make sure LD_LIBRARY_PATH
-    points at them, re-executing once if the environment needs to change."""
-    if os.environ.get("SHORTS_CUDA_SET") == "1":
-        return
-    env = os.environ.get("LD_LIBRARY_PATH", "")
-    nvidia = PROJECT_ROOT / "venv" / "lib"
-    add = []
-    for p in nvidia.glob("python3*/site-packages/nvidia") if nvidia.exists() else []:
-        for _dir in sorted(p.iterdir()):
-            lib = _dir / "lib"
-            if lib.is_dir():
-                sp = str(lib)
-                if sp not in env:
-                    add.append(sp)
-    if add:
-        os.environ["LD_LIBRARY_PATH"] = ":".join(add + ([env] if env else []))
-        os.environ["SHORTS_CUDA_SET"] = "1"
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
-_bootstrap_cuda()
-
-import faster_whisper
+from whisper_utils import get_whisper_model
 from make_cinematic_ass import create_ass_subtitles
 
 
@@ -123,16 +100,7 @@ def transcribe(media, srt_path, ass_path, model_size="small", force=False):
         print(f"  [skip] subtitles already exist, reusing {srt_path}")
         return
 
-    model = None
-    for device, compute_type in [("cuda", "int8_float16"), ("cpu", "int8")]:
-        try:
-            model = faster_whisper.WhisperModel(model_size, device=device, compute_type=compute_type)
-            print(f"  using whisper on {device}")
-            break
-        except Exception as e:
-            print(f"  whisper on {device} unavailable ({e}); trying next option")
-    if model is None:
-        raise RuntimeError("Could not load a whisper model on cuda or cpu")
+    model = get_whisper_model(model_size)
 
     segments, _ = model.transcribe(str(media), vad_filter=True, word_timestamps=True)
 
@@ -211,9 +179,7 @@ def process_clip(opts, clip):
     start = clip.get("start")
     dur = clip.get("dur")
     out_dir = Path(opts.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     clip_dir = out_dir / name
-    clip_dir.mkdir(parents=True, exist_ok=True)
 
     raw = clip_dir / "raw.mp4"
     blurred = clip_dir / "blurred.mp4"
@@ -221,6 +187,39 @@ def process_clip(opts, clip):
     cinematic = clip_dir / "cinematic.mp4"
     srt = clip_dir / "subtitles.srt"
     ass = clip_dir / "captions.ass"
+
+    if opts.dry_run:
+        print(f"=== {name} ===  [DRY RUN]")
+        if opts.existing:
+            raw = Path(opts.existing)
+            print(f"  input    : {raw} (existing)")
+        else:
+            video = Path(opts.video)
+            if not video.exists():
+                print(f"  !!! source video not found: {video}")
+            if start is None or dur is None:
+                print(f"  !!! clip needs 'start' and 'dur' (or an 'existing' path)")
+            print(f"  extract  : {video} -ss {start} -t {dur} -> {raw}"
+                  + ("  (skip: exists)" if raw.exists() and not opts.force else ""))
+        print(f"  blur     : {raw} -> {blurred}"
+              + ("  (skip: exists)" if blurred.exists() and not opts.force else ""))
+        print(f"  subtract : {blurred} -> {srt} + {ass}"
+              + ("  (skip: exists)" if srt.exists() and ass.exists() and not opts.force else ""))
+        if opts.no_music or not Path(opts.music).exists():
+            print("  mix      : (skipped - no music)")
+            mix_base = blurred
+        else:
+            print(f"  mix      : {blurred} + {opts.music} [{opts.music_start} @ vol {opts.music_volume}] -> {final}"
+                  + ("  (skip: exists)" if final.exists() and not opts.force else ""))
+            mix_base = final
+        print(f"  burn     : {mix_base} + {ass} -> {cinematic}"
+              + ("  (skip: exists)" if cinematic.exists() and not opts.force else ""))
+        if opts.cleanup:
+            print("  cleanup  : remove raw/blurred/final once cinematic exists")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    clip_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {name} ===")
     t0 = time.time()
@@ -257,6 +256,18 @@ def process_clip(opts, clip):
     burn_ass(mix_base, ass, cinematic, force=opts.force)
     print(f"DONE -> {cinematic}  ({time.time() - t0:.1f}s)")
 
+    if opts.cleanup:
+        removed = []
+        if not opts.existing:
+            removed.append(raw)
+        removed.append(blurred)
+        if mix_base is final:
+            removed.append(final)
+        for p in removed:
+            if p.exists():
+                p.unlink()
+                print(f"  [cleanup] removed {p}")
+
 
 def _resolve(path: str) -> Path:
     """Resolve a configured path; relative paths are anchored to the project root."""
@@ -272,6 +283,7 @@ def effective_opts(opts, config, clip):
     ropts = argparse.Namespace(**vars(opts))
     for key in ("video", "music", "music_start", "music_volume", "out_dir",
                 "whisper_model", "blur", "no_music", "no_duck", "existing",
+                "dry_run", "cleanup",
                 "duck_threshold", "duck_ratio", "duck_attack", "duck_release"):
         if config.get(key) is not None:
             setattr(ropts, key, config[key])
@@ -315,6 +327,10 @@ def main():
     parser.add_argument("--whisper-model", default="small", help="faster-whisper model size")
     parser.add_argument("--blur", default="20:5", help="boxblur strength as 'radius:passes'")
     parser.add_argument("--force", action="store_true", help="redo all steps even if outputs exist")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the plan for every clip (paths, skip/run) without executing anything")
+    parser.add_argument("--cleanup", action="store_true",
+                        help="delete raw/blurred/final intermediate files for a clip once cinematic.mp4 exists")
     opts = parser.parse_args()
 
     if opts.clips:

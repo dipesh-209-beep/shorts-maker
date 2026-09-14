@@ -13,7 +13,9 @@ shorts-maker/
 │   └── music.mp3
 ├── scripts/                  # all Python code
 │   ├── make_shorts.py        # main pipeline (one command does everything)
-│   └── make_cinematic_ass.py # word-level ASS subtitle generator
+│   ├── make_cinematic_ass.py # word-level ASS subtitle generator
+│   ├── whisper_utils.py      # shared whisper model loading (GPU->CPU fallback + cache)
+│   └── transcribe.py         # standalone CLI: media -> SRT only
 ├── clips/                    # generated output
 │   ├── clip01/
 │   └── clip02/
@@ -166,6 +168,20 @@ venv/bin/python scripts/make_shorts.py --start 120 --dur 45 --name clip01 \
 By default, each step is **skipped if its output file already exists** — safe
 to re-run the same command after a crash; it picks up where it left off.
 
+**Sanity-check a long batch before running it:**
+```bash
+venv/bin/python scripts/make_shorts.py --clips clips.json --dry-run
+```
+Prints every clip's extract/blur/transcribe/mix/burn plan with resolved paths
+and which steps would be skipped — without running ffmpeg or loading whisper.
+
+**Free up disk space on batch runs:** `--cleanup` deletes `raw.mp4`,
+`blurred.mp4`, and `final.mp4` for each clip once `cinematic.mp4` exists (an
+`--existing` input file is never deleted):
+```bash
+venv/bin/python scripts/make_shorts.py --clips clips.json --cleanup
+```
+
 To force a full redo of one clip:
 ```bash
 venv/bin/python scripts/make_shorts.py --existing clips/clip01/raw.mp4 --name clip01 --force
@@ -200,6 +216,8 @@ venv/bin/python scripts/make_shorts.py --existing clips/clip01/raw.mp4 --name cl
 | `--blur` | `20:5` | background blur `radius:passes` |
 | `--out-dir` | `clips` | parent output directory (per-clip subfolders inside) |
 | `--force` | off | redo all steps even if outputs exist |
+| `--dry-run` | off | print the step plan (paths + skip/run) without running anything |
+| `--cleanup` | off | delete `raw`/`blurred`/`final` after `cinematic.mp4` is produced |
 
 Every flag maps to an equally-named key usable in `clips.json` (top-level or
 per-clip), e.g. `"--no-music"` becomes `"no_music": true`.

@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from faster_whisper import WhisperModel
+from whisper_utils import get_whisper_model
 
 
 def ts(t: float) -> str:
@@ -23,6 +23,11 @@ def main():
         default=None,
         help="Optional output SRT path (defaults to same name with .srt)",
     )
+    parser.add_argument(
+        "--model",
+        default="small",
+        help="faster-whisper model size (default: small)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input_file)
@@ -31,7 +36,7 @@ def main():
 
     output_path = Path(args.output) if args.output else input_path.with_suffix(".srt")
 
-    model = WhisperModel("small", device="cuda", compute_type="int8_float16")
+    model = get_whisper_model(args.model)
     segments, _ = model.transcribe(str(input_path), vad_filter=True)
 
     with open(output_path, "w", encoding="utf-8") as f:

@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from faster_whisper import WhisperModel
+from whisper_utils import get_whisper_model
 
 
 def format_ass_time(seconds: float) -> str:
@@ -55,19 +55,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             else:
                 end_t = format_ass_time(chunk[-1]["end"])
 
-            # Build formatted text with ASS red color tag &H000000FF for active word
+            # Build formatted text with ASS red color tag &H000000FF for the
+            # active word. Compare by index within the chunk (not dict values),
+            # so duplicate words with identical text/timings don't both
+            # highlight at once. line1 holds chunk indices 0..mid-1, line2 mid..end.
             formatted_line1 = []
-            for w in line1_words:
+            for word_idx, w in enumerate(line1_words):
                 txt = w["word"].strip()
-                if w == target_word:
+                if word_idx == active_idx:
                     formatted_line1.append(f"{{\\c&H0000FF&}}{txt}{{\\c&HFFFFFF&}}")
                 else:
                     formatted_line1.append(txt)
 
             formatted_line2 = []
-            for w in line2_words:
+            for word_idx, w in enumerate(line2_words, mid):
                 txt = w["word"].strip()
-                if w == target_word:
+                if word_idx == active_idx:
                     formatted_line2.append(f"{{\\c&H0000FF&}}{txt}{{\\c&HFFFFFF&}}")
                 else:
                     formatted_line2.append(txt)
@@ -87,12 +90,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", type=str, help="Input video/audio file")
+    parser.add_argument("--model", default="small", help="faster-whisper model size (default: small)")
     args = parser.parse_args()
 
     input_path = Path(args.input_file)
     output_ass = input_path.with_suffix(".ass")
 
-    model = WhisperModel("small", device="cuda", compute_type="int8_float16")
+    model = get_whisper_model(args.model)
     segments, _ = model.transcribe(
         str(input_path), vad_filter=True, word_timestamps=True
     )
