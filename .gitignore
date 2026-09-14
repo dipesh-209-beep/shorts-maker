@@ -1,9 +1,9 @@
 venv/
 clips/
+video/
 music/
 __pycache__/
 *.mp4
 *.srt
 *.ass
-video.mp4
 transcript.txt

@@ -6,7 +6,7 @@ For each clip in --clips (or a single --start/--dur/--name):
    2. build a 1080x1920 blurred-background vertical version
    3. transcribe -> srt + cinematic word-level ass subtitles
    4. mix background music under the dialogue
-   5. burn the subtitles in -> clips/<name>_cinematic.mp4
+   5. burn the subtitles in -> clips/<name>/<name>_cinematic.mp4
 
 Changes from the original version:
    - GPU->CPU fallback for transcription instead of a hard crash
@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = ROOT.parent
 
 
 def _bootstrap_cuda():
@@ -35,7 +36,7 @@ def _bootstrap_cuda():
     if os.environ.get("SHORTS_CUDA_SET") == "1":
         return
     env = os.environ.get("LD_LIBRARY_PATH", "")
-    nvidia = ROOT / "venv" / "lib"
+    nvidia = PROJECT_ROOT / "venv" / "lib"
     add = []
     for p in nvidia.glob("python3*/site-packages/nvidia") if nvidia.exists() else []:
         for _dir in sorted(p.iterdir()):
@@ -211,13 +212,15 @@ def process_clip(opts, clip):
     dur = clip.get("dur")
     out_dir = Path(opts.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    clip_dir = out_dir / name
+    clip_dir.mkdir(parents=True, exist_ok=True)
 
-    raw = out_dir / f"{name}.mp4"
-    blurred = out_dir / f"{name}_blurred.mp4"
-    final = out_dir / f"{name}_final.mp4"
-    cinematic = out_dir / f"{name}_cinematic.mp4"
-    srt = out_dir / f"{name}.srt"
-    ass = out_dir / f"{name}_blurred.ass"
+    raw = clip_dir / f"{name}.mp4"
+    blurred = clip_dir / f"{name}_blurred.mp4"
+    final = clip_dir / f"{name}_final.mp4"
+    cinematic = clip_dir / f"{name}_cinematic.mp4"
+    srt = clip_dir / f"{name}.srt"
+    ass = clip_dir / f"{name}_blurred.ass"
 
     print(f"=== {name} ===")
     t0 = time.time()
@@ -257,15 +260,19 @@ def process_clip(opts, clip):
 
 def main():
     parser = argparse.ArgumentParser(description="Automatic shorts pipeline")
-    parser.add_argument("--video", default="video.mp4", help="source video")
+    parser.add_argument(
+        "--video",
+        default=str(PROJECT_ROOT / "video" / "video.mp4"),
+        help="source video",
+    )
     parser.add_argument("--clips", type=str, help="JSON file: [{\"name\",\"start\",\"dur\"}]")
     parser.add_argument("--start", type=float, help="clip start in seconds (single clip)")
     parser.add_argument("--dur", type=float, help="clip duration in seconds")
     parser.add_argument("--name", type=str, help="clip output name (single clip)")
-    parser.add_argument("--music", default="music/music.mp3")
+    parser.add_argument("--music", default=str(PROJECT_ROOT / "music" / "music.mp3"))
     parser.add_argument("--music-start", default="00:02:00", help="offset into music file")
     parser.add_argument("--music-volume", type=float, default=0.12)
-    parser.add_argument("--out-dir", default="clips")
+    parser.add_argument("--out-dir", default=str(PROJECT_ROOT / "clips"))
     parser.add_argument("--no-music", action="store_true")
     parser.add_argument("--no-duck", action="store_true",
                          help="disable auto-ducking; mix music at a flat --music-volume instead")
