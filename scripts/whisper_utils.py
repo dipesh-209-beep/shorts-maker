@@ -53,7 +53,12 @@ def load_whisper_model(model_size: str = "small"):
 
 def get_whisper_model(model_size: str = "small"):
     """Like load_whisper_model, but caches one model per model_size so a batch run
-    loads the model once and reuses it across all clips."""
+    loads the model once and reuses it across all clips.
+
+    Note: the cache accumulates — one model per distinct model_size stays loaded
+    for the process lifetime, so a batch that mixes sizes (e.g. some clips "tiny",
+    others "large-v3") keeps every distinct size resident, and VRAM usage grows
+    with the number of distinct sizes rather than staying at one model's footprint."""
     if model_size not in _MODELS:
         _MODELS[model_size] = load_whisper_model(model_size)
     return _MODELS[model_size]

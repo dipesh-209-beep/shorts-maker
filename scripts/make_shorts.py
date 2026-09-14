@@ -218,6 +218,10 @@ def process_clip(opts, clip):
             print("  cleanup  : remove raw/blurred/final once cinematic exists")
         return
 
+    if cinematic.exists() and not opts.force:
+        print(f"  [skip] '{name}' already has {cinematic.name}, nothing to do")
+        return
+
     out_dir.mkdir(parents=True, exist_ok=True)
     clip_dir.mkdir(parents=True, exist_ok=True)
 
