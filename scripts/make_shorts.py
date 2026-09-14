@@ -203,7 +203,7 @@ def process_clip(opts, clip):
                   + ("  (skip: exists)" if raw.exists() and not opts.force else ""))
         print(f"  blur     : {raw} -> {blurred}"
               + ("  (skip: exists)" if blurred.exists() and not opts.force else ""))
-        print(f"  subtract : {blurred} -> {srt} + {ass}"
+        print(f"  transcribe: {blurred} -> {srt} + {ass}"
               + ("  (skip: exists)" if srt.exists() and ass.exists() and not opts.force else ""))
         if opts.no_music or not Path(opts.music).exists():
             print("  mix      : (skipped - no music)")
